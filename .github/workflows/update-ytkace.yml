@@ -65,6 +65,10 @@ jobs:
           )
 
           upstream_tag = upstream["tag_name"]
+          release_notes = (upstream.get("body") or "").strip()
+
+          if not release_notes:
+              release_notes = "No release notes provided by the developer."
 
           print("Latest upstream release:", upstream_tag)
 
@@ -146,7 +150,10 @@ jobs:
           release_body = (
               f"Automatically mirrored from itzzace/ytkace.\n\n"
               f"Upstream tag: {upstream_tag}\n"
-              f"Original file: {asset['name']}"
+              f"Original file: {asset['name']}\n\n"
+              f"---\n\n"
+              f"## Official Release Notes\n\n"
+              f"{release_notes}"
           )
 
           if release:
@@ -226,8 +233,7 @@ jobs:
                                   f"download/ytkace-latest/YTKACE.ipa"
                               ),
                               "size": len(ipa_data),
-                              "localizedDescription": (
-                                  f"Mirrored from YTKACE release {upstream_tag}."
+                              "localizedDescription": release_notes"
                               )
                           }
                       ]
