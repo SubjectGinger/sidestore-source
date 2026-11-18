@@ -21,7 +21,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Download and publish latest YTKACE
+      - name: Download, mirror and update SideStore source
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -35,56 +35,63 @@ jobs:
           import zipfile
           import plistlib
           import subprocess
-          from datetime import datetime
 
           token = os.environ["GH_TOKEN"]
           repo = os.environ["GITHUB_REPOSITORY"]
           api = "https://api.github.com"
 
-          def request(url, method="GET", data=None, content_type="application/vnd.github+json"):
+          def request(url, method="GET", data=None,
+                      content_type="application/vnd.github+json"):
               headers = {
                   "Accept": "application/vnd.github+json",
                   "Authorization": f"Bearer {token}",
                   "X-GitHub-Api-Version": "2022-11-28"
               }
+
               if data is not None:
                   headers["Content-Type"] = content_type
+
               req = urllib.request.Request(
                   url, data=data, headers=headers, method=method
               )
+
               with urllib.request.urlopen(req) as response:
                   body = response.read()
                   return json.loads(body) if body else None
 
-          # Find the latest upstream release.
+          # 1. Find the latest upstream YTKACE release.
           upstream = request(
               f"{api}/repos/itzzace/ytkace/releases/latest"
           )
 
           upstream_tag = upstream["tag_name"]
+
           print("Latest upstream release:", upstream_tag)
 
-          # Check whether this release has already been mirrored.
+          # 2. Check our existing mirrored release.
+          release = None
+
           try:
-              current = request(
+              release = request(
                   f"{api}/repos/{repo}/releases/tags/ytkace-latest"
               )
-              if f"Upstream tag: {upstream_tag}" in current.get("body", ""):
-                  print("Already up to date. Nothing to do.")
+
+              if f"Upstream tag: {upstream_tag}" in release.get("body", ""):
+                  print("Already up to date. Skipping.")
                   raise SystemExit(0)
+
           except urllib.error.HTTPError as error:
               if error.code != 404:
                   raise
 
-          # Select the standard YouTube IPA, not the iOS 16 variant.
-          assets = upstream["assets"]
+          # 3. Find the standard YouTube IPA.
           matches = [
-              a for a in assets
+              asset for asset in upstream["assets"]
               if re.fullmatch(
                   r"YTKACE_.+_YouTube_.+\.ipa",
-                  a["name"]
+                  asset["name"]
               )
-              and "iOS16" not in a["name"]
+              and "iOS16" not in asset["name"]
           ]
 
           if len(matches) != 1:
@@ -93,28 +100,33 @@ jobs:
               )
 
           asset = matches[0]
+
           print("Selected IPA:", asset["name"])
 
-          # Download the IPA.
+          # 4. Download the IPA.
           req = urllib.request.Request(
               asset["browser_download_url"],
               headers={"User-Agent": "YTKACE-SideStore-Updater"}
           )
+
           with urllib.request.urlopen(req) as response:
               ipa_data = response.read()
 
-          with open("YTKACE.ipa", "wb") as f:
-              f.write(ipa_data)
+          with open("YTKACE.ipa", "wb") as file:
+              file.write(ipa_data)
 
-          # Read the actual app information from its Info.plist.
+          # 5. Extract actual app metadata.
           with zipfile.ZipFile("YTKACE.ipa") as ipa:
               plist_paths = [
                   name for name in ipa.namelist()
-                  if re.fullmatch(r"Payload/[^/]+\.app/Info\.plist", name)
+                  if re.fullmatch(
+                      r"Payload/[^/]+\.app/Info\.plist",
+                      name
+                  )
               ]
 
               if not plist_paths:
-                  raise Exception("Could not find app Info.plist in IPA")
+                  raise Exception("Could not find app Info.plist")
 
               info = plistlib.loads(ipa.read(plist_paths[0]))
 
@@ -128,47 +140,55 @@ jobs:
           print("App:", app_name)
           print("Bundle ID:", bundle_id)
           print("Version:", version)
+          print("IPA size:", len(ipa_data))
 
-          # Remove the previous mirrored release and tag.
-          try:
-              current = request(
-                  f"{api}/repos/{repo}/releases/tags/ytkace-latest"
-              )
-              request(
-                  f"{api}/repos/{repo}/releases/{current['id']}",
-                  method="DELETE"
-              )
-          except urllib.error.HTTPError as error:
-              if error.code != 404:
-                  raise
-
-          try:
-              request(
-                  f"{api}/repos/{repo}/git/refs/tags/ytkace-latest",
-                  method="DELETE"
-              )
-          except urllib.error.HTTPError as error:
-              if error.code != 404:
-                  raise
-
-          # Create a new mirrored release.
-          release = request(
-              f"{api}/repos/{repo}/releases",
-              method="POST",
-              data=json.dumps({
-                  "tag_name": "ytkace-latest",
-                  "name": f"YTKACE {version}",
-                  "body": (
-                      f"Automatically mirrored from itzzace/ytkace.\n\n"
-                      f"Upstream tag: {upstream_tag}\n"
-                      f"Original file: {asset['name']}"
-                  ),
-                  "make_latest": "true"
-              }).encode()
+          # 6. Create or update our permanent GitHub release.
+          release_body = (
+              f"Automatically mirrored from itzzace/ytkace.\n\n"
+              f"Upstream tag: {upstream_tag}\n"
+              f"Original file: {asset['name']}"
           )
 
-          # Upload the IPA to our release.
+          if release:
+              print("Updating existing mirrored release.")
+
+              # Remove only the previous IPA attachment.
+              for old_asset in release.get("assets", []):
+                  if old_asset["name"] == "YTKACE.ipa":
+                      request(
+                          f"{api}/repos/{repo}/releases/assets/"
+                          f"{old_asset['id']}",
+                          method="DELETE"
+                      )
+
+              # Update the release without deleting its tag.
+              release = request(
+                  f"{api}/repos/{repo}/releases/{release['id']}",
+                  method="PATCH",
+                  data=json.dumps({
+                      "name": f"YTKACE {version}",
+                      "body": release_body,
+                      "make_latest": "true"
+                  }).encode()
+              )
+
+          else:
+              print("Creating first mirrored release.")
+
+              release = request(
+                  f"{api}/repos/{repo}/releases",
+                  method="POST",
+                  data=json.dumps({
+                      "tag_name": "ytkace-latest",
+                      "name": f"YTKACE {version}",
+                      "body": release_body,
+                      "make_latest": "true"
+                  }).encode()
+              )
+
+          # 7. Upload the new IPA.
           upload_url = release["upload_url"].split("{")[0]
+
           request(
               upload_url + "?name=YTKACE.ipa",
               method="POST",
@@ -176,62 +196,76 @@ jobs:
               content_type="application/octet-stream"
           )
 
-          # Build the SideStore source.
+          print("IPA successfully uploaded.")
+
+          # 8. Generate the SideStore apps.json.
           source = {
               "$schema": "https://github.com/SideStore/sidestore-source-types/raw/main/schema.json",
               "name": "My Personal Source",
               "identifier": "com.subjectginger.sidestore",
-              "apps": [{
-                  "name": "YTKACE",
-                  "bundleIdentifier": bundle_id,
-                  "developerName": "itzzace",
-                  "subtitle": "YouTube with YTKACE modifications",
-                  "localizedDescription": "Automatically updated YTKACE YouTube IPA.",
-                  "iconURL": (
-                      f"https://raw.githubusercontent.com/"
-                      f"{repo}/main/icon.png"
-                  ),
-                  "versions": [{
-                      "version": version,
-                      "date": upstream["published_at"][:10],
-                      "downloadURL": (
-                          f"https://github.com/{repo}/releases/"
-                          f"download/ytkace-latest/YTKACE.ipa"
+              "apps": [
+                  {
+                      "name": "YTKACE",
+                      "bundleIdentifier": bundle_id,
+                      "developerName": "itzzace",
+                      "subtitle": "YouTube with YTKACE modifications",
+                      "localizedDescription": "Automatically updated YTKACE YouTube IPA.",
+                      "iconURL": (
+                          f"https://raw.githubusercontent.com/"
+                          f"{repo}/main/icon.png"
                       ),
-                      "size": len(ipa_data),
-                      "localizedDescription": (
-                          f"Mirrored from YTKACE release {upstream_tag}."
-                      )
-                  }]
-              }]
+                      "versions": [
+                          {
+                              "version": version,
+                              "date": upstream["published_at"][:10],
+                              "downloadURL": (
+                                  f"https://github.com/{repo}/releases/"
+                                  f"download/ytkace-latest/YTKACE.ipa"
+                              ),
+                              "size": len(ipa_data),
+                              "localizedDescription": (
+                                  f"Mirrored from YTKACE release {upstream_tag}."
+                              )
+                          }
+                      ]
+                  }
+              ]
           }
 
-          with open("apps.json", "w") as f:
-              json.dump(source, f, indent=2)
-              f.write("\n")
+          with open("apps.json", "w") as file:
+              json.dump(source, file, indent=2)
+              file.write("\n")
 
-          # Commit the updated source.
+          # 9. Commit the updated SideStore source.
           subprocess.run(
               ["git", "config", "user.name", "github-actions[bot]"],
               check=True
           )
+
           subprocess.run(
               ["git", "config", "user.email",
                "41898282+github-actions[bot]@users.noreply.github.com"],
               check=True
           )
+
           subprocess.run(["git", "add", "apps.json"], check=True)
 
-          result = subprocess.run(["git", "diff", "--cached", "--quiet"])
+          result = subprocess.run(
+              ["git", "diff", "--cached", "--quiet"]
+          )
 
           if result.returncode == 1:
               subprocess.run(
                   ["git", "commit", "-m", f"Update YTKACE to {version}"],
                   check=True
               )
+
               subprocess.run(["git", "push"], check=True)
 
-          print("YTKACE SideStore source updated successfully.")
+          elif result.returncode != 0:
+              raise Exception("Could not check Git changes")
+
+          print("YTKACE SideStore source updated successfully!")
           PY
 
           python update.py
