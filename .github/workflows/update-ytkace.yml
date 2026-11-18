@@ -233,7 +233,7 @@ jobs:
                                   f"download/ytkace-latest/YTKACE.ipa"
                               ),
                               "size": len(ipa_data),
-                              "localizedDescription": release_notes"
+                              "localizedDescription": release_notes
                               )
                           }
                       ]
