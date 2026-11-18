@@ -201,7 +201,10 @@ jobs:
           # 8. Generate the SideStore apps.json.
           source = {
               "$schema": "https://github.com/SideStore/sidestore-source-types/raw/main/schema.json",
-              "name": "My Personal Source",
+              "name": "Personal Source",
+              "subtitle": "YTKACE for Sidestore and LiveContainer",
+              "description": "My personal Sidestore source for YTKACE.",
+              "website": "https://itzzace.github.io/ytkace/",
               "identifier": "com.subjectginger.sidestore",
               "apps": [
                   {
