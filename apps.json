@@ -1,0 +1,24 @@
+{
+  "$schema": "https://github.com/SideStore/sidestore-source-types/raw/main/schema.json",
+  "name": "My Personal Source",
+  "identifier": "com.subjectginger.sidestore",
+  "apps": [
+    {
+      "name": "YTKACE",
+      "bundleIdentifier": "com.google.ios.youtube",
+      "developerName": "itzzace",
+      "subtitle": "YouTube with YTKACE modifications",
+      "localizedDescription": "Automatically updated YTKACE YouTube IPA.",
+      "iconURL": "https://raw.githubusercontent.com/SubjectGinger/sidestore-source/main/icon.png",
+      "versions": [
+        {
+          "version": "21.46.3",
+          "date": "2026-11-15",
+          "downloadURL": "https://github.com/SubjectGinger/sidestore-source/releases/download/ytkace-latest/YTKACE.ipa",
+          "size": 141821255,
+          "localizedDescription": "Mirrored from YTKACE release v1.1.8."
+        }
+      ]
+    }
+  ]
+}
