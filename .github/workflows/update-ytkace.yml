@@ -234,7 +234,6 @@ jobs:
                               ),
                               "size": len(ipa_data),
                               "localizedDescription": release_notes
-                              )
                           }
                       ]
                   }
