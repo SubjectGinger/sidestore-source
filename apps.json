@@ -1,6 +1,9 @@
 {
   "$schema": "https://github.com/SideStore/sidestore-source-types/raw/main/schema.json",
-  "name": "My Personal Source",
+  "name": "Personal Source",
+  "subtitle": "YTKACE for Sidestore and LiveContainer",
+  "description": "My personal Sidestore source for YTKACE.",
+  "website": "https://itzzace.github.io/ytkace/",
   "identifier": "com.subjectginger.sidestore",
   "apps": [
     {
@@ -12,11 +15,11 @@
       "iconURL": "https://raw.githubusercontent.com/SubjectGinger/sidestore-source/main/icon.png",
       "versions": [
         {
-          "version": "21.46.3",
-          "date": "2026-11-15",
+          "version": "21.47.6",
+          "date": "2026-11-22",
           "downloadURL": "https://github.com/SubjectGinger/sidestore-source/releases/download/ytkace-latest/YTKACE.ipa",
-          "size": 141821255,
-          "localizedDescription": "Mirrored from YTKACE release v1.1.8."
+          "size": 143414110,
+          "localizedDescription": "by @itzzace0\n\nWhat's new:\n\u2022 Updated to YouTube 21.47.6\n\u2022 Action bar editor: reorder buttons and move \u22ef items into the bar\n\u2022 Added Remove AI Summaries\n\u2022 Added Avoid Notch Cutoff\n\u2022 Added an option to disable PiP from the miniplayer\n\u2022 Added a fullscreen orientation option, and vertical videos stay in portrait\n\u2022 Added the Open in YTKACE Safari extension\n\u2022 Remove Products now also hides product rows and cards in feeds, search and the iPad sidebar\n\u2022 Backups moved to their own page with last backup and size details\n\u2022 Swipe to Seek shows the preview frame and a bigger scrubber\n\nFixed:\n\u2022 Launch hang and crash with Remove Filter Chips on the new Home tabs layout\n\u2022 Products panel opening on its own\n\u2022 PiP falling back for free accounts outside the US\n\u2022 Dislike count on iPhone when Dislike is in the \u22ef menu\n\u2022 Hold speed pill in right-to-left languages and at 2x\n\u2022 Blank search with Shorts hidden\n\u2022 Messages button showing on some tabs\n\u2022 HLS playback fix not fully applying on newer YouTube versions\n\nYouTube 21.47.6 requires iOS 17, so there are two IPAs:\n\u2022 `YTKACE_1.1.9_YouTube_21.47.6.ipa` for iOS 17 and newer\n\u2022 `YTKACE_1.1.9_YouTube_iOS16_21.33.6.ipa` for iOS 16"
         }
       ]
     }
