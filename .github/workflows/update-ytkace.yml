@@ -1,5 +1,5 @@
 
-name: Update YTKACE SideStore Source
+name: Update SideStore Source
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: update-ytkace
+  group: update-sidestore-source
   cancel-in-progress: false
 
 jobs:
@@ -59,192 +59,324 @@ jobs:
                   body = response.read()
                   return json.loads(body) if body else None
 
-          # 1. Find the latest upstream YTKACE release.
-          upstream = request(
-              f"{api}/repos/itzzace/ytkace/releases/latest"
-          )
-
-          upstream_tag = upstream["tag_name"]
-          release_notes = (upstream.get("body") or "").strip()
-
-          if not release_notes:
-              release_notes = "No release notes provided by the developer."
-
-          print("Latest upstream release:", upstream_tag)
-
-          # 2. Check our existing mirrored release.
-          release = None
-
-          try:
-              release = request(
-                  f"{api}/repos/{repo}/releases/tags/ytkace-latest"
+          def get_latest_release(upstream_repo):
+              return request(
+                  f"{api}/repos/{upstream_repo}/releases/latest"
               )
 
-              if f"Upstream tag: {upstream_tag}" in release.get("body", ""):
-                  print("Already up to date. Skipping.")
-                  raise SystemExit(0)
+          def select_ipa(release, app_key):
+              assets = release["assets"]
 
-          except urllib.error.HTTPError as error:
-              if error.code != 404:
-                  raise
+              if app_key == "ytkace":
+                  matches = [
+                      asset for asset in assets
+                      if re.fullmatch(
+                          r"YTKACE_.+_YouTube_.+\.ipa",
+                          asset["name"]
+                      )
+                      and "iOS16" not in asset["name"]
+                  ]
 
-          # 3. Find the standard YouTube IPA.
-          matches = [
-              asset for asset in upstream["assets"]
-              if re.fullmatch(
-                  r"YTKACE_.+_YouTube_.+\.ipa",
-                  asset["name"]
-              )
-              and "iOS16" not in asset["name"]
-          ]
+              elif app_key == "arrmatey":
+                  # Prefer the specifically named ArrMatey.ipa.
+                  exact = [
+                      asset for asset in assets
+                      if asset["name"].lower() == "arrmatey.ipa"
+                  ]
 
-          if len(matches) != 1:
-              raise Exception(
-                  f"Expected one standard YouTube IPA, found {len(matches)}"
-              )
+                  if exact:
+                      matches = exact
+                  else:
+                      matches = [
+                          asset for asset in assets
+                          if asset["name"].lower().endswith(".ipa")
+                      ]
 
-          asset = matches[0]
+              else:
+                  raise Exception(f"Unknown app: {app_key}")
 
-          print("Selected IPA:", asset["name"])
-
-          # 4. Download the IPA.
-          req = urllib.request.Request(
-              asset["browser_download_url"],
-              headers={"User-Agent": "YTKACE-SideStore-Updater"}
-          )
-
-          with urllib.request.urlopen(req) as response:
-              ipa_data = response.read()
-
-          with open("YTKACE.ipa", "wb") as file:
-              file.write(ipa_data)
-
-          # 5. Extract actual app metadata.
-          with zipfile.ZipFile("YTKACE.ipa") as ipa:
-              plist_paths = [
-                  name for name in ipa.namelist()
-                  if re.fullmatch(
-                      r"Payload/[^/]+\.app/Info\.plist",
-                      name
+              if len(matches) != 1:
+                  raise Exception(
+                      f"{app_key}: expected exactly one matching IPA, "
+                      f"found {len(matches)}: "
+                      f"{[a['name'] for a in matches]}"
                   )
-              ]
 
-              if not plist_paths:
-                  raise Exception("Could not find app Info.plist")
+              return matches[0]
 
-              info = plistlib.loads(ipa.read(plist_paths[0]))
+          def extract_metadata(ipa_path):
+              with zipfile.ZipFile(ipa_path) as ipa:
+                  plist_paths = [
+                      name for name in ipa.namelist()
+                      if re.fullmatch(
+                          r"Payload/[^/]+\.app/Info\.plist",
+                          name
+                      )
+                  ]
 
-          bundle_id = info["CFBundleIdentifier"]
-          version = info["CFBundleShortVersionString"]
-          app_name = info.get(
-              "CFBundleDisplayName",
-              info.get("CFBundleName", "YTKACE")
-          )
-
-          print("App:", app_name)
-          print("Bundle ID:", bundle_id)
-          print("Version:", version)
-          print("IPA size:", len(ipa_data))
-
-          # 6. Create or update our permanent GitHub release.
-          release_body = (
-              f"Automatically mirrored from itzzace/ytkace.\n\n"
-              f"Upstream tag: {upstream_tag}\n"
-              f"Original file: {asset['name']}\n\n"
-              f"---\n\n"
-              f"## Official Release Notes\n\n"
-              f"{release_notes}"
-          )
-
-          if release:
-              print("Updating existing mirrored release.")
-
-              # Remove only the previous IPA attachment.
-              for old_asset in release.get("assets", []):
-                  if old_asset["name"] == "YTKACE.ipa":
-                      request(
-                          f"{api}/repos/{repo}/releases/assets/"
-                          f"{old_asset['id']}",
-                          method="DELETE"
+                  if not plist_paths:
+                      raise Exception(
+                          f"Could not find app Info.plist in {ipa_path}"
                       )
 
-              # Update the release without deleting its tag.
-              release = request(
-                  f"{api}/repos/{repo}/releases/{release['id']}",
-                  method="PATCH",
-                  data=json.dumps({
-                      "name": f"YTKACE {version}",
-                      "body": release_body,
-                      "make_latest": "true"
-                  }).encode()
+                  info = plistlib.loads(ipa.read(plist_paths[0]))
+
+              return {
+                  "bundle_id": info["CFBundleIdentifier"],
+                  "version": info["CFBundleShortVersionString"],
+                  "name": info.get(
+                      "CFBundleDisplayName",
+                      info.get("CFBundleName", "")
+                  )
+              }
+
+          def mirror_release(app):
+              key = app["key"]
+              upstream_repo = app["upstream_repo"]
+              stable_tag = app["stable_tag"]
+              filename = app["filename"]
+
+              print(f"\n========== Updating {app['name']} ==========")
+
+              # 1. Fetch the latest upstream release.
+              upstream = get_latest_release(upstream_repo)
+              upstream_tag = upstream["tag_name"]
+
+              release_notes = (upstream.get("body") or "").strip()
+
+              if not release_notes:
+                  release_notes = (
+                      "No release notes provided by the developer."
+                  )
+
+              print("Latest upstream release:", upstream_tag)
+
+              # 2. Find the correct IPA.
+              asset = select_ipa(upstream, key)
+              print("Selected IPA:", asset["name"])
+
+              # 3. Download the IPA.
+              req = urllib.request.Request(
+                  asset["browser_download_url"],
+                  headers={"User-Agent": "SideStore-Source-Updater"}
               )
 
-          else:
-              print("Creating first mirrored release.")
+              with urllib.request.urlopen(req) as response:
+                  ipa_data = response.read()
 
-              release = request(
-                  f"{api}/repos/{repo}/releases",
-                  method="POST",
-                  data=json.dumps({
-                      "tag_name": "ytkace-latest",
-                      "name": f"YTKACE {version}",
-                      "body": release_body,
-                      "make_latest": "true"
-                  }).encode()
-              )
+              with open(filename, "wb") as file:
+                  file.write(ipa_data)
 
-          # 7. Upload the new IPA.
-          upload_url = release["upload_url"].split("{")[0]
+              # 4. Extract the real app metadata.
+              metadata = extract_metadata(filename)
 
-          request(
-              upload_url + "?name=YTKACE.ipa",
-              method="POST",
-              data=ipa_data,
-              content_type="application/octet-stream"
-          )
+              bundle_id = metadata["bundle_id"]
+              version = metadata["version"]
 
-          print("IPA successfully uploaded.")
+              print("App:", metadata["name"])
+              print("Bundle ID:", bundle_id)
+              print("Version:", version)
+              print("IPA size:", len(ipa_data))
 
-          # 8. Generate the SideStore apps.json.
-          source = {
-              "$schema": "https://github.com/SideStore/sidestore-source-types/raw/main/schema.json",
-              "name": "Personal Source",
-              "subtitle": "YTKACE for Sidestore and LiveContainer",
-              "description": "My personal Sidestore source for YTKACE.",
-              "website": "https://itzzace.github.io/ytkace/",
-              "identifier": "com.subjectginger.sidestore",
-              "apps": [
-                  {
-                      "name": "YTKACE",
-                      "bundleIdentifier": bundle_id,
-                      "developerName": "itzzace",
-                      "subtitle": "YouTube with YTKACE modifications",
-                      "localizedDescription": "Automatically updated YTKACE YouTube IPA.",
-                      "iconURL": (
-                          f"https://raw.githubusercontent.com/"
-                          f"{repo}/main/icon.png"
-                      ),
-                      "versions": [
-                          {
-                              "version": version,
-                              "date": upstream["published_at"][:10],
-                              "downloadURL": (
-                                  f"https://github.com/{repo}/releases/"
-                                  f"download/ytkace-latest/YTKACE.ipa"
-                              ),
-                              "size": len(ipa_data),
-                              "localizedDescription": release_notes
-                          }
-                      ]
+              # 5. Look up our permanent mirrored release.
+              release = None
+
+              try:
+                  release = request(
+                      f"{api}/repos/{repo}/releases/tags/{stable_tag}"
+                  )
+
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+
+              # 6. Skip the upload if this upstream release is
+              # already mirrored. Metadata is still returned so
+              # apps.json can be regenerated.
+              if (
+                  release
+                  and f"Upstream tag: {upstream_tag}"
+                  in release.get("body", "")
+              ):
+                  print(f"{app['name']} is already up to date.")
+                  return {
+                      "bundle_id": bundle_id,
+                      "version": version,
+                      "date": (
+                          upstream.get("published_at")
+                          or upstream.get("created_at")
+                      )[:10],
+                      "size": len(ipa_data),
+                      "release_notes": release_notes,
+                      "download_url": (
+                          f"https://github.com/{repo}/releases/"
+                          f"download/{stable_tag}/{filename}"
+                      )
                   }
-              ]
+
+              # 7. Prepare the mirrored release notes.
+              release_body = (
+                  f"Automatically mirrored from {upstream_repo}.\n\n"
+                  f"Upstream tag: {upstream_tag}\n"
+                  f"Original file: {asset['name']}\n\n"
+                  f"---\n\n"
+                  f"## Official Release Notes\n\n"
+                  f"{release_notes}"
+              )
+
+              if release:
+                  print("Updating existing mirrored release.")
+
+                  # Delete only the old IPA attachment.
+                  for old_asset in release.get("assets", []):
+                      if old_asset["name"] == filename:
+                          request(
+                              f"{api}/repos/{repo}/releases/assets/"
+                              f"{old_asset['id']}",
+                              method="DELETE"
+                          )
+
+                  # Update the existing release without deleting
+                  # its permanent tag.
+                  release = request(
+                      f"{api}/repos/{repo}/releases/{release['id']}",
+                      method="PATCH",
+                      data=json.dumps({
+                          "name": f"{app['name']} {version}",
+                          "body": release_body
+                      }).encode()
+                  )
+
+              else:
+                  print("Creating first mirrored release.")
+
+                  release = request(
+                      f"{api}/repos/{repo}/releases",
+                      method="POST",
+                      data=json.dumps({
+                          "tag_name": stable_tag,
+                          "name": f"{app['name']} {version}",
+                          "body": release_body
+                      }).encode()
+                  )
+
+              # 8. Upload the new IPA.
+              upload_url = release["upload_url"].split("{")[0]
+
+              request(
+                  upload_url + f"?name={filename}",
+                  method="POST",
+                  data=ipa_data,
+                  content_type="application/octet-stream"
+              )
+
+              print(f"{filename} successfully uploaded.")
+
+              return {
+                  "bundle_id": bundle_id,
+                  "version": version,
+                  "date": (
+                      upstream.get("published_at")
+                      or upstream.get("created_at")
+                  )[:10],
+                  "size": len(ipa_data),
+                  "release_notes": release_notes,
+                  "download_url": (
+                      f"https://github.com/{repo}/releases/"
+                      f"download/{stable_tag}/{filename}"
+                  )
+              }
+
+          # 9. Define the apps managed by this source.
+          apps = [
+              {
+                  "key": "ytkace",
+                  "name": "YTKACE",
+                  "upstream_repo": "itzzace/ytkace",
+                  "stable_tag": "ytkace-latest",
+                  "filename": "YTKACE.ipa",
+                  "developer": "itzzace",
+                  "subtitle": "YouTube with YTKACE modifications",
+                  "icon_url": (
+                      f"https://raw.githubusercontent.com/"
+                      f"{repo}/main/ytkace-icon.png"
+                  )
+              },
+              {
+                  "key": "arrmatey",
+                  "name": "ArrMatey",
+                  "upstream_repo": "owenlejeune/ArrMatey",
+                  "stable_tag": "arrmatey-latest",
+                  "filename": "ArrMatey.ipa",
+                  "developer": "owenlejeune",
+                  "subtitle": "Mobile client for managing your *arr stack"
+                  "icon_url": (
+                    f"https://raw.githubusercontent.com/"
+                    f"{repo}/main/arrmatey-icon.png"
+                  )
+              }
+          ]
+
+          # 10. Process both apps independently.
+          results = {}
+
+          for app in apps:
+              results[app["key"]] = mirror_release(app)
+
+          # 11. Generate the SideStore apps.json.
+          source_apps = []
+
+          for app in apps:
+              result = results[app["key"]]
+
+              app_entry = {
+                  "name": app["name"],
+                  "bundleIdentifier": result["bundle_id"],
+                  "developerName": app["developer"],
+                  "subtitle": app["subtitle"],
+                  "localizedDescription": (
+                      f"Automatically updated {app['name']} IPA."
+                  ),
+                  "versions": [
+                      {
+                          "version": result["version"],
+                          "date": result["date"],
+                          "downloadURL": result["download_url"],
+                          "size": result["size"],
+                          "localizedDescription": (
+                              result["release_notes"]
+                          )
+                      }
+                  ]
+              }
+
+              # Use the existing custom icon for YTKACE.
+              # ArrMatey can use SideStore's default icon handling.
+              if "icon_url" in app:
+                  app_entry["iconURL"] = app["icon_url"]
+
+              source_apps.append(app_entry)
+
+          source = {
+              "$schema": (
+                  "https://github.com/SideStore/"
+                  "sidestore-source-types/raw/main/schema.json"
+              ),
+              "name": "Personal Source",
+              "subtitle": "Apps for SideStore and LiveContainer",
+              "description": (
+                  "My personal SideStore source for YTKACE and ArrMatey."
+              ),
+              "website": "https://github.com/" + repo,
+              "identifier": "com.subjectginger.sidestore",
+              "apps": source_apps
           }
 
           with open("apps.json", "w") as file:
               json.dump(source, file, indent=2)
               file.write("\n")
 
-          # 9. Commit the updated SideStore source.
+          # 12. Commit the updated SideStore source.
           subprocess.run(
               ["git", "config", "user.name", "github-actions[bot]"],
               check=True
@@ -263,8 +395,13 @@ jobs:
           )
 
           if result.returncode == 1:
+              versions = ", ".join(
+                  f"{app['name']} {results[app['key']]['version']}"
+                  for app in apps
+              )
+
               subprocess.run(
-                  ["git", "commit", "-m", f"Update YTKACE to {version}"],
+                  ["git", "commit", "-m", f"Update apps: {versions}"],
                   check=True
               )
 
@@ -273,7 +410,13 @@ jobs:
           elif result.returncode != 0:
               raise Exception("Could not check Git changes")
 
-          print("YTKACE SideStore source updated successfully!")
+          print("\nSideStore source updated successfully!")
+
+          for app in apps:
+              print(
+                  f"{app['name']}: "
+                  f"{results[app['key']]['version']}"
+              )
           PY
 
           python update.py
