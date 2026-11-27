@@ -309,7 +309,7 @@ jobs:
                   "stable_tag": "arrmatey-latest",
                   "filename": "ArrMatey.ipa",
                   "developer": "owenlejeune",
-                  "subtitle": "Mobile client for managing your *arr stack"
+                  "subtitle": "Mobile client for managing your *arr stack",
                   "icon_url": (
                       f"https://raw.githubusercontent.com/"
                       f"{repo}/main/arrmatey-icon.png"
